@@ -199,6 +199,18 @@ void vPortEndScheduler( void ) PRIVILEGED_FUNCTION;
 	void vPortStoreTaskMPUSettings( xMPU_SETTINGS *xMPUSettings, const struct xMEMORY_REGION * const xRegions, StackType_t *pxBottomOfStack, uint16_t usStackDepth ) PRIVILEGED_FUNCTION;
 #endif
 
+
+#ifdef configUSE_SCHEDULE_OUTPUT_IO
+	#define SCHEDULE_OUTPUT_IO_DDR	DDRK
+	#define	SCHEDULE_OUTPUT_IO_PORT	PORTK
+	typedef enum {	// max 2-bit = 4 event types
+		eJobStart = 0,
+		eJobEnd
+	} eTaskSchedulEvent;
+	void vInitScheduleEventOutputIos(void);
+	void vOutputSchedulEventToIo(UBaseType_t inTaskNum, eTaskSchedulEvent inEvent);
+#endif
+
 #ifdef __cplusplus
 }
 #endif

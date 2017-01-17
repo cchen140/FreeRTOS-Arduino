@@ -2028,6 +2028,9 @@ eSleepModeStatus eTaskConfirmSleepModeStatus( void ) PRIVILEGED_FUNCTION;
  */
 void *pvTaskIncrementMutexHeldCount( void ) PRIVILEGED_FUNCTION;
 
+/* Added by CY. */
+UBaseType_t uxGetCurrentTaskNumber( void );
+
 #ifdef __cplusplus
 }
 #endif

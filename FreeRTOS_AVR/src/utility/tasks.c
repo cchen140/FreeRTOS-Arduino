@@ -154,7 +154,7 @@ typedef struct tskTaskControlBlock
 		UBaseType_t 	uxCriticalNesting; 	/*< Holds the critical section nesting depth for ports that do not maintain their own count in the port layer. */
 	#endif
 
-	#if ( configUSE_TRACE_FACILITY == 1 )
+	#if ( configUSE_TRACE_FACILITY == 1 || configUSE_SCHEDULE_OUTPUT_IO == 1)
 		UBaseType_t		uxTCBNumber;		/*< Stores a number that increments each time a TCB is created.  It allows debuggers to determine when a task has been deleted and then recreated. */
 		UBaseType_t  	uxTaskNumber;		/*< Stores a number specifically for use by third party trace code. */
 	#endif
@@ -693,7 +693,7 @@ StackType_t *pxTopOfStack;
 
 			uxTaskNumber++;
 
-			#if ( configUSE_TRACE_FACILITY == 1 )
+			#if ( configUSE_TRACE_FACILITY == 1 || configUSE_SCHEDULE_OUTPUT_IO == 1)
 			{
 				/* Add a counter into the TCB for tracing only. */
 				pxNewTCB->uxTCBNumber = uxTaskNumber;
@@ -1542,7 +1542,12 @@ StackType_t *pxTopOfStack;
 
 void vTaskStartScheduler( void )
 {
-BaseType_t xReturn;
+	BaseType_t xReturn;
+
+	/* Initialize IO ports if schedule output is enabled.*/
+	#ifdef configUSE_SCHEDULE_OUTPUT_IO
+		vInitScheduleEventOutputIos();
+	#endif
 
 	/* Add the idle task at the lowest priority. */
 	#if ( INCLUDE_xTaskGetIdleTaskHandle == 1 )
@@ -2213,6 +2218,10 @@ void vTaskSwitchContext( void )
 		xYieldPending = pdFALSE;
 		traceTASK_SWITCHED_OUT();
 
+		#ifdef configUSE_SCHEDULE_OUTPUT_IO
+			vOutputSchedulEventToIo(uxGetCurrentTaskNumber(), eJobEnd);
+		#endif
+
 		#if ( configGENERATE_RUN_TIME_STATS == 1 )
 		{
 				#ifdef portALT_GET_RUN_TIME_COUNTER_VALUE
@@ -2247,6 +2256,10 @@ void vTaskSwitchContext( void )
 		optimised asm code. */
 		taskSELECT_HIGHEST_PRIORITY_TASK();
 		traceTASK_SWITCHED_IN();
+
+		#ifdef configUSE_SCHEDULE_OUTPUT_IO
+			vOutputSchedulEventToIo(uxGetCurrentTaskNumber(), eJobStart);
+		#endif
 
 		#if ( configUSE_NEWLIB_REENTRANT == 1 )
 		{
@@ -2660,6 +2673,12 @@ void vTaskMissedYield( void )
 
 #endif /* configUSE_TRACE_FACILITY */
 /*-----------------------------------------------------------*/
+
+#if ( configUSE_SCHEDULE_OUTPUT_IO == 1)
+	UBaseType_t uxGetCurrentTaskNumber( void ) {
+		return pxCurrentTCB->uxTaskNumber;
+	}
+#endif
 
 #if ( configUSE_TRACE_FACILITY == 1 )
 

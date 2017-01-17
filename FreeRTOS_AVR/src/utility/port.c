@@ -624,4 +624,18 @@ uint8_t ucHighByte, ucLowByte;
 #endif
 #endif // WHG
 
+#ifdef configUSE_SCHEDULE_OUTPUT_IO
+	void vInitScheduleEventOutputIos(void) {
+		SCHEDULE_OUTPUT_IO_DDR = 0xFF;	// configure selected port as output
+	}
+
+	UBaseType_t scheduleEventOutputSignal = 1;
+	void vOutputSchedulEventToIo(UBaseType_t inTaskNum, eTaskSchedulEvent inEvent) {
+		// bit 0 1 2 3 4 => task number
+		// bit 5 6 => event type
+		// bit 7 => signal
+		scheduleEventOutputSignal = !scheduleEventOutputSignal;	// toggle to make a signal.
+		SCHEDULE_OUTPUT_IO_PORT = scheduleEventOutputSignal<<7 | ((inEvent&0x3)<<5) | (inTaskNum & 0x1F);
+	}
+#endif
 	

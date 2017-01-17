@@ -84,6 +84,9 @@
  * See http://www.freertos.org/a00110.html.
  *----------------------------------------------------------*/
 
+/* Added by CY. Configuration for schedule output via IOs. */
+#define	configUSE_SCHEDULE_OUTPUT_IO	1	// It must be 1 to enable the feature.
+
 #define configUSE_PREEMPTION		1
 #define configUSE_IDLE_HOOK			1
 #if 1  // WHG For Arduino
