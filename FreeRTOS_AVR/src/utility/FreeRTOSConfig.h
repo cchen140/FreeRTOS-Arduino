@@ -95,7 +95,7 @@
 #define configCPU_CLOCK_HZ			( ( unsigned long ) 8000000 )
 #define configTICK_RATE_HZ			( ( TickType_t ) 1000 )
 #endif  // WHG
-#define configMAX_PRIORITIES		( 4 )
+#define configMAX_PRIORITIES		( 99 )	// CY: increase priority limit.
 #define configMINIMAL_STACK_SIZE	( ( unsigned short ) 100 )  // WHG
 #define configTOTAL_HEAP_SIZE		( (size_t ) ( 0 ) )  // WHG type 3 heap
 #define configMAX_TASK_NAME_LEN		( 8 )
