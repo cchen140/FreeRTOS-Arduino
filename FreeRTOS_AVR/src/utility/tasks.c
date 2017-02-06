@@ -71,6 +71,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* ceil for TaskShuffler */
+#include <math.h>
+
 /* Defining MPU_WRAPPERS_INCLUDED_FROM_API_FILE prevents task.h from redefining
 all the API functions to use the MPU wrappers.  That should only be done when
 task.h is included from an application file. */
@@ -190,6 +193,17 @@ typedef struct tskTaskControlBlock
 	#if ( configUSE_TASK_NOTIFICATIONS == 1 )
 		volatile uint32_t ulNotifiedValue;
 		volatile eNotifyValue eNotifyState;
+	#endif
+
+	#if ( configUSE_TASKSHUFFLER > 0 )
+		uint32_t	ulWorstCaseExecutionTime;
+		uint32_t	ulRemainingExecutionTime;
+		uint32_t	ulPeriod;
+		uint32_t	ulDeadline;
+		uint32_t	ulWorstCaseResponseTime;
+		uint32_t	ulWorstCaseMxInversionBudget;	// Vi
+		uint32_t	ulRemainingInversionBudget;
+		UBaseType_t	uxMinInversionPriority;	// Mi
 	#endif
 
 } tskTCB;
@@ -738,6 +752,207 @@ StackType_t *pxTopOfStack;
 	return xReturn;
 }
 /*-----------------------------------------------------------*/
+
+#if ( configUSE_TASKSHUFFLER > 0 )
+BaseType_t xTaskCreateForTaskShuffler( TaskFunction_t pxTaskCode, const char * const pcName, const uint16_t usStackDepth, void * const pvParameters, UBaseType_t uxPriority, TaskHandle_t * const pxCreatedTask, uint32_t ulPeriod, uint32_t ulWCET ) /*lint !e971 Unqualified char types are allowed for strings and single characters only. */
+{
+	return xTaskGenericCreateExtended( ( pxTaskCode ), ( pcName ), ( usStackDepth ), ( pvParameters ), ( uxPriority ), ( pxCreatedTask ), ( NULL ), ( NULL ), (ulPeriod), (ulWCET) );
+}
+BaseType_t xTaskGenericCreateExtended( TaskFunction_t pxTaskCode, const char * const pcName, const uint16_t usStackDepth, void * const pvParameters, UBaseType_t uxPriority, TaskHandle_t * const pxCreatedTask, StackType_t * const puxStackBuffer, const MemoryRegion_t * const xRegions, uint32_t ulPeriod, uint32_t ulWCET ) /*lint !e971 Unqualified char types are allowed for strings and single characters only. */
+{
+	BaseType_t xReturn;
+	TCB_t * pxNewTCB;
+	StackType_t *pxTopOfStack;
+
+	configASSERT( pxTaskCode );
+	configASSERT( ( ( uxPriority & ( UBaseType_t ) ( ~portPRIVILEGE_BIT ) ) < ( UBaseType_t ) configMAX_PRIORITIES ) );
+
+	/* Allocate the memory required by the TCB and stack for the new task,
+	checking that the allocation was successful. */
+	pxNewTCB = prvAllocateTCBAndStack( usStackDepth, puxStackBuffer );
+
+	if( pxNewTCB != NULL )
+	{
+		#if( portUSING_MPU_WRAPPERS == 1 )
+			/* Should the task be created in privileged mode? */
+			BaseType_t xRunPrivileged;
+			if( ( uxPriority & portPRIVILEGE_BIT ) != 0U )
+			{
+				xRunPrivileged = pdTRUE;
+			}
+			else
+			{
+				xRunPrivileged = pdFALSE;
+			}
+			uxPriority &= ~portPRIVILEGE_BIT;
+
+			if( puxStackBuffer != NULL )
+			{
+				/* The application provided its own stack.  Note this so no
+				attempt is made to delete the stack should that task be
+				deleted. */
+				pxNewTCB->xUsingStaticallyAllocatedStack = pdTRUE;
+			}
+			else
+			{
+				/* The stack was allocated dynamically.  Note this so it can be
+				deleted again if the task is deleted. */
+				pxNewTCB->xUsingStaticallyAllocatedStack = pdFALSE;
+			}
+		#endif /* portUSING_MPU_WRAPPERS == 1 */
+
+		/* Calculate the top of stack address.  This depends on whether the
+		stack grows from high memory to low (as per the 80x86) or vice versa.
+		portSTACK_GROWTH is used to make the result positive or negative as
+		required by the port. */
+		#if( portSTACK_GROWTH < 0 )
+		{
+			pxTopOfStack = pxNewTCB->pxStack + ( usStackDepth - ( uint16_t ) 1 );
+			pxTopOfStack = ( StackType_t * ) ( ( ( portPOINTER_SIZE_TYPE ) pxTopOfStack ) & ( ~( ( portPOINTER_SIZE_TYPE ) portBYTE_ALIGNMENT_MASK ) ) ); /*lint !e923 MISRA exception.  Avoiding casts between pointers and integers is not practical.  Size differences accounted for using portPOINTER_SIZE_TYPE type. */
+
+			/* Check the alignment of the calculated top of stack is correct. */
+			configASSERT( ( ( ( portPOINTER_SIZE_TYPE ) pxTopOfStack & ( portPOINTER_SIZE_TYPE ) portBYTE_ALIGNMENT_MASK ) == 0UL ) );
+		}
+		#else /* portSTACK_GROWTH */
+		{
+			pxTopOfStack = pxNewTCB->pxStack;
+
+			/* Check the alignment of the stack buffer is correct. */
+			configASSERT( ( ( ( portPOINTER_SIZE_TYPE ) pxNewTCB->pxStack & ( portPOINTER_SIZE_TYPE ) portBYTE_ALIGNMENT_MASK ) == 0UL ) );
+
+			/* If we want to use stack checking on architectures that use
+			a positive stack growth direction then we also need to store the
+			other extreme of the stack space. */
+			pxNewTCB->pxEndOfStack = pxNewTCB->pxStack + ( usStackDepth - 1 );
+		}
+		#endif /* portSTACK_GROWTH */
+
+		/* Setup the newly allocated TCB with the initial state of the task. */
+		prvInitialiseTCBVariables( pxNewTCB, pcName, uxPriority, xRegions, usStackDepth );
+
+		// Initialize TaskShuffler parameters
+		pxNewTCB->ulPeriod = ulPeriod;
+		pxNewTCB->ulDeadline = ulPeriod;
+		pxNewTCB->ulWorstCaseExecutionTime = ulWCET;
+
+		/* Initialize the TCB stack to look as if the task was already running,
+		but had been interrupted by the scheduler.  The return address is set
+		to the start of the task function. Once the stack has been initialised
+		the	top of stack variable is updated. */
+		#if( portUSING_MPU_WRAPPERS == 1 )
+		{
+			pxNewTCB->pxTopOfStack = pxPortInitialiseStack( pxTopOfStack, pxTaskCode, pvParameters, xRunPrivileged );
+		}
+		#else /* portUSING_MPU_WRAPPERS */
+		{
+			pxNewTCB->pxTopOfStack = pxPortInitialiseStack( pxTopOfStack, pxTaskCode, pvParameters );
+		}
+		#endif /* portUSING_MPU_WRAPPERS */
+
+		if( ( void * ) pxCreatedTask != NULL )
+		{
+			/* Pass the TCB out - in an anonymous way.  The calling function/
+			task can use this as a handle to delete the task later if
+			required.*/
+			*pxCreatedTask = ( TaskHandle_t ) pxNewTCB;
+		}
+		else
+		{
+			mtCOVERAGE_TEST_MARKER();
+		}
+
+		/* Ensure interrupts don't access the task lists while they are being
+		updated. */
+		taskENTER_CRITICAL();
+		{
+			uxCurrentNumberOfTasks++;
+			if( pxCurrentTCB == NULL )
+			{
+				/* There are no other tasks, or all the other tasks are in
+				the suspended state - make this the current task. */
+				pxCurrentTCB =  pxNewTCB;
+
+				if( uxCurrentNumberOfTasks == ( UBaseType_t ) 1 )
+				{
+					/* This is the first task to be created so do the preliminary
+					initialisation required.  We will not recover if this call
+					fails, but we will report the failure. */
+					prvInitialiseTaskLists();
+				}
+				else
+				{
+					mtCOVERAGE_TEST_MARKER();
+				}
+			}
+			else
+			{
+				/* If the scheduler is not already running, make this task the
+				current task if it is the highest priority task to be created
+				so far. */
+				if( xSchedulerRunning == pdFALSE )
+				{
+					if( pxCurrentTCB->uxPriority <= uxPriority )
+					{
+						pxCurrentTCB = pxNewTCB;
+					}
+					else
+					{
+						mtCOVERAGE_TEST_MARKER();
+					}
+				}
+				else
+				{
+					mtCOVERAGE_TEST_MARKER();
+				}
+			}
+
+			uxTaskNumber++;
+
+			#if ( configUSE_TRACE_FACILITY == 1 || configUSE_SCHEDULE_OUTPUT_IO == 1)
+			{
+				/* Add a counter into the TCB for tracing only. */
+				pxNewTCB->uxTCBNumber = uxTaskNumber;
+			}
+			#endif /* configUSE_TRACE_FACILITY */
+			traceTASK_CREATE( pxNewTCB );
+
+			prvAddTaskToReadyList( pxNewTCB );
+
+			xReturn = pdPASS;
+			portSETUP_TCB( pxNewTCB );
+		}
+		taskEXIT_CRITICAL();
+	}
+	else
+	{
+		xReturn = errCOULD_NOT_ALLOCATE_REQUIRED_MEMORY;
+		traceTASK_CREATE_FAILED();
+	}
+
+	if( xReturn == pdPASS )
+	{
+		if( xSchedulerRunning != pdFALSE )
+		{
+			/* If the created task is of a higher priority than the current task
+			then it should run now. */
+			if( pxCurrentTCB->uxPriority < uxPriority )
+			{
+				taskYIELD_IF_USING_PREEMPTION();
+			}
+			else
+			{
+				mtCOVERAGE_TEST_MARKER();
+			}
+		}
+		else
+		{
+			mtCOVERAGE_TEST_MARKER();
+		}
+	}
+
+	return xReturn;
+}
+#endif
 
 #if ( INCLUDE_vTaskDelete == 1 )
 
@@ -1547,6 +1762,11 @@ void vTaskStartScheduler( void )
 	/* Initialize IO ports if schedule output is enabled.*/
 	#ifdef configUSE_SCHEDULE_OUTPUT_IO
 		vInitScheduleEventOutputIos();
+	#endif
+
+	/* Compute necessary variables (response time, etc.) for taskshuffler before the idle task is added. */
+	#if ( configUSE_TASKSHUFFLER > 0 )
+		vTaskShufflerInitialize();
 	#endif
 
 	/* Add the idle task at the lowest priority. */
@@ -4489,6 +4709,146 @@ TickType_t uxReturn;
 	}
 
 #endif /* configUSE_TASK_NOTIFICATIONS */
+
+#if ( configUSE_TASKSHUFFLER > 0 )
+	//TODO: return something to tell whether the TaskShuffler is correctly initialized.
+	void vTaskShufflerInitialize( void ) {
+		//xComputeWCRT(pxReadyTasksLists, configMAX_PRIORITIES);
+		vComputeInversionBudget(pxReadyTasksLists, configMAX_PRIORITIES);
+	}
+
+	/* This function is not used by TaskShuffler. */
+//	BaseType_t xComputeWCRT(List_t pxTaskLists[], UBaseType_t uxlistCount) {
+//		for (UBaseType_t uxTaskPriority_i=1; uxTaskPriority_i<uxlistCount; uxTaskPriority_i++) {
+//			// Iterate through each task from the lowest priority (0 is supposed to be idle task so skip 0).
+//			// Assuming there is only one (or zero) task in a priority list.
+//			if (pxTaskLists[uxTaskPriority_i].uxNumberOfItems == 0) {
+//				// If there is no task in this priority, then head to the next priority.
+//				continue;
+//			}
+//
+//			//int numItr = 0;
+//			//double Wi = task_i.execTime;
+//			//double prev_Wi = 0;
+//			uint32_t ulIterationCount = 0;
+//			TCB_t *pxTCB_i = pxTaskLists[uxTaskPriority_i].pxIndex->pvOwner;
+//			double WCRT_i = (double)(pxTCB_i->ulWorstCaseExecutionTime);
+//			double previousWCRT_i;
+//
+//			while (1) {
+//				double interference = 0;
+//				for (UBaseType_t uxTaskPriority_j=uxTaskPriority_i+1; uxTaskPriority_j<uxlistCount; uxTaskPriority_j++) {
+//					if (pxTaskLists[uxTaskPriority_j].uxNumberOfItems == 0) {
+//						continue;
+//					}
+//
+//					TCB_t *pxTCB_j = pxTaskLists[uxTaskPriority_j].pxIndex->pvOwner;
+//					uint32_t ulPeriod_j = pxTCB_j->ulPeriod;
+//					uint32_t ulExecTime_j = pxTCB_j->ulWorstCaseExecutionTime;
+//
+//					//double Tj = task_hp.period;
+//					//double Cj = task_hp.execTime;
+//
+//					//if (WITH_RELEASE_JITTER)
+//					//	interference += myCeil( (Wi + task_hp.max_jitter) / Tj) * Cj;
+//					//else
+//					//	interference += myCeil(Wi / Tj) * Cj;
+//
+//					interference += ceil(WCRT_i / (double)ulPeriod_j) * (double)ulExecTime_j;
+//				}
+//
+//				//Wi = task_i.execTime + interference;
+//				WCRT_i = pxTCB_i->ulWorstCaseExecutionTime + interference;
+//
+//				//if (Double.compare(Wi, prev_Wi) == 0) {
+//				//	if (WITH_RELEASE_JITTER)
+//				//		return Wi + task_i.max_jitter;
+//				//	else
+//				//		return Wi;
+//				//}
+//				if (previousWCRT_i == WCRT_i) {
+//					// WCRT is found;
+//					break;
+//				} else {
+//					//prev_Wi = Wi;
+//					//numItr++;
+//					//if (numItr > 1000 || Double.isInfinite(Wi) || Wi < 0)
+//					//	return Double.MAX_VALUE;
+//					//}
+//					previousWCRT_i = WCRT_i;
+//					ulIterationCount++;
+//					if (ulIterationCount>1000 || WCRT_i<0) {
+//						return 1;	// 1 to indicate error.
+//						break;
+//					}
+//				}
+//			}
+//
+//			pxTCB_i->ulWorstCaseResponseTime = WCRT_i;
+//
+//		}
+//		return 0;	// return 0 to indicate all good.
+//	}
+
+	void vComputeInversionBudget(List_t pxTaskLists[], UBaseType_t uxlistCount) {
+		for (UBaseType_t uxTaskPriority_i=1; uxTaskPriority_i<uxlistCount; uxTaskPriority_i++) {
+			// Iterate through each task from the lowest priority (0 is supposed to be idle task so skip 0).
+			// Assuming there is only one (or zero) task in a priority list.
+			if (pxTaskLists[uxTaskPriority_i].uxNumberOfItems == 0) {
+				// If there is no task in this priority, then head to the next priority.
+				continue;
+			}
+
+			//int numItr = 0;
+			//double Wi = task_i.deadline;
+			//double prev_Wi = 0;
+			uint32_t = 0;
+			TCB_t *pxTCB_i = pxTaskLists[uxTaskPriority_i].pxIndex->pvOwner;
+			double dDeadline_i = (double)(pxTCB_i->ulDeadline);
+			uint32_t ulExecTime_i = pxTCB_i->ulWorstCaseExecutionTime;
+
+			double dInterference = 0;
+			//for (int i = 0; i < numTasks; i++) {
+			for (UBaseType_t uxTaskPriority_j=uxTaskPriority_i+1; uxTaskPriority_j<uxlistCount; uxTaskPriority_j++) {
+				if (pxTaskLists[uxTaskPriority_j].uxNumberOfItems == 0) {
+					continue;
+				}
+
+				TCB_t *pxTCB_j = pxTaskLists[uxTaskPriority_j].pxIndex->pvOwner;
+				double dPeriod_j = pxTCB_j->ulPeriod;
+				double dExecTime_j = pxTCB_j->ulWorstCaseExecutionTime;
+
+				//double Tj = task_hp.period;
+				//double Cj = task_hp.execTime;
+
+				//interference += myCeil(Wi / Tj) * Cj;
+				dInterference += ( 1 + myCeil(dDeadline_i / dPeriod_j)) * dExecTime_j;
+			}
+
+			//Wi = task_i.execTime + interference ;
+			//if (WITH_RELEASE_JITTER)
+			//	Wi = task_i.execTime + interference + (int) (task_i.period * JITTER_RATIO);
+			//else
+			//	Wi = task_i.execTime + interference;
+
+			//return task_i.deadline - Wi;
+
+			pxTCB_i->ulWorstCaseMxInversionBudget = (uint32_t)(dDeadline_i - (dInterference + ulExecTime_i));
+			pxTCB_i->ulRemainingInversionBudget = pxTCB_i->ulWorstCaseMxInversionBudget;
+		}
+	}
+
+	double myCeil(double val) {
+		double diff = ceil(val) - val;
+		if (diff > 0.99999) {
+			//TODO: Something wrong with ceil value, handle it.
+			//System.out.println("###" + (val) + "###\t\t " + Math.ceil(val));
+			//System.exit(-1);
+		}
+		return ceil(val);
+	}
+
+#endif
 
 #ifdef FREERTOS_MODULE_TEST
 	#include "tasks_test_access_functions.h"

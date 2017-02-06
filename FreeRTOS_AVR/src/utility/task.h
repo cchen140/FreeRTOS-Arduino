@@ -344,6 +344,13 @@ is used in assert() statements. */
  */
 #define xTaskCreate( pvTaskCode, pcName, usStackDepth, pvParameters, uxPriority, pxCreatedTask ) xTaskGenericCreate( ( pvTaskCode ), ( pcName ), ( usStackDepth ), ( pvParameters ), ( uxPriority ), ( pxCreatedTask ), ( NULL ), ( NULL ) )
 
+/* TaskShuffler Task Creation.
+ * The difference between this function and generic one is that it requires task's period and WCET. */
+#if configUSE_TASKSHUFFLER > 0
+	BaseType_t xTaskCreateForTaskShuffler( TaskFunction_t pxTaskCode, const char * const pcName, const uint16_t usStackDepth, void * const pvParameters, UBaseType_t uxPriority, TaskHandle_t * const pxCreatedTask, uint32_t ulPeriod, uint32_t ulWCET );
+	BaseType_t xTaskGenericCreateExtended( TaskFunction_t pxTaskCode, const char * const pcName, const uint16_t usStackDepth, void * const pvParameters, UBaseType_t uxPriority, TaskHandle_t * const pxCreatedTask, StackType_t * const puxStackBuffer, const MemoryRegion_t * const xRegions, uint32_t ulPeriod, uint32_t ulWCET );
+#endif
+
 /**
  * task. h
  *<pre>
@@ -2030,6 +2037,12 @@ void *pvTaskIncrementMutexHeldCount( void ) PRIVILEGED_FUNCTION;
 
 /* Added by CY. */
 UBaseType_t uxGetCurrentTaskNumber( void );
+
+#if ( configUSE_TASKSHUFFLER > 0 )
+	void vTaskShufflerInitialize(void);
+	void vComputeInversionBudget(List_t pxTaskLists[], UBaseType_t uxlistCount);
+	double myCeil(double val);
+#endif
 
 #ifdef __cplusplus
 }

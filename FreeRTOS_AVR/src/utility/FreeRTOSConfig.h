@@ -84,8 +84,11 @@
  * See http://www.freertos.org/a00110.html.
  *----------------------------------------------------------*/
 
-/* Added by CY. Configuration for schedule output via IOs. */
+// Added by CY. Configuration for schedule output via IOs.
 #define	configUSE_SCHEDULE_OUTPUT_IO	1	// It must be 1 to enable the feature.
+
+// Added by CY. TaskShuffler
+#define configUSE_TASKSHUFFLER		1		// 0: normal scheduler, 1: taskshuffler
 
 #define configUSE_PREEMPTION		1
 #define configUSE_IDLE_HOOK			1
