@@ -3,8 +3,8 @@
 TaskParam appTaskParamArray[] = {
 //  period (us), priority, computation time (us), computing size
 		{ 1000000, APP_TASK_LOWEST_PRIORITY, 	500000, 0 },
-		{ 200000, APP_TASK_LOWEST_PRIORITY + 1, 43000, 0 },
-//		{ 10000, APP_TASK_LOWEST_PRIORITY + 2, 1900, 0 }
+		{ 500000, APP_TASK_LOWEST_PRIORITY + 1, 50000, 0 },
+		{ 10000, APP_TASK_LOWEST_PRIORITY + 2, 1900, 0 }
 //		,
 //		{20000, APP_TASK_LOWEST_PRIORITY+3, 100, 0},
 //		{18000, APP_TASK_LOWEST_PRIORITY+4, 100, 0},
@@ -46,14 +46,23 @@ void createSyntheticTasks(void) {
 		// Build the string of task name.
 		sprintf(taskName, "APP-%d", loop + 1);
 
+	#if ( configUSE_TASKSHUFFLER > 0)
 		xTaskCreateForTaskShuffler(prvGeneralSyntheticTask, /* The function that implements the task. */
-		taskName, /* The text name assigned to the task - for debug only as it is not used by the kernel. */
-		APP_TASK_STACK_SIZE,/* The size of the stack to allocate to the task. */
-		&(appTaskParamArray[loop]), /* The parameter passed to the task. */
-		appTaskParamArray[loop].priority, /* The priority assigned to the task. */
-		NULL,	/* The task handle is not required, so NULL is passed. */
-		appTaskParamArray[loop].periodUs,
-		appTaskParamArray[loop].computationTimeUs);
+			taskName, /* The text name assigned to the task - for debug only as it is not used by the kernel. */
+			APP_TASK_STACK_SIZE,/* The size of the stack to allocate to the task. */
+			&(appTaskParamArray[loop]), /* The parameter passed to the task. */
+			appTaskParamArray[loop].priority, /* The priority assigned to the task. */
+			NULL,	/* The task handle is not required, so NULL is passed. */
+			appTaskParamArray[loop].periodUs,
+			appTaskParamArray[loop].computationTimeUs);
+	#else
+		xTaskCreate(prvGeneralSyntheticTask, /* The function that implements the task. */
+			taskName, /* The text name assigned to the task - for debug only as it is not used by the kernel. */
+			APP_TASK_STACK_SIZE,/* The size of the stack to allocate to the task. */
+			&(appTaskParamArray[loop]), /* The parameter passed to the task. */
+			appTaskParamArray[loop].priority, /* The priority assigned to the task. */
+			NULL);	/* The task handle is not required, so NULL is passed. */
+	#endif
 	}
 }
 
@@ -83,7 +92,12 @@ void prvGeneralSyntheticTask(void *pvParameters) {
 		delay(pvTaskParam->computationTimeUs/1000);
 		delayMicroseconds(pvTaskParam->computationTimeUs%1000);
 
-		// Yield
-		vTaskDelayUntil(&xLastWakeTime, xPeriodInTicks);
+
+		#if ( configUSE_TASKSHUFFLER > 0)
+			vTaskJobEnd(&xLastWakeTime, xPeriodInTicks);
+		#else
+			// Yield
+			vTaskDelayUntil(&xLastWakeTime, xPeriodInTicks);
+		#endif
 	}
 }

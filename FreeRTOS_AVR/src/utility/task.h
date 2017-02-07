@@ -2036,12 +2036,17 @@ eSleepModeStatus eTaskConfirmSleepModeStatus( void ) PRIVILEGED_FUNCTION;
 void *pvTaskIncrementMutexHeldCount( void ) PRIVILEGED_FUNCTION;
 
 /* Added by CY. */
-UBaseType_t uxGetCurrentTaskNumber( void );
+UBaseType_t uxGetCurrentTaskTcbNumber( void );
 
 #if ( configUSE_TASKSHUFFLER > 0 )
 	void vTaskShufflerInitialize(void);
 	void vComputeInversionBudget(List_t pxTaskLists[], UBaseType_t uxlistCount);
 	double myCeil(double val);
+	void vTaskJobEnd( TickType_t * const pxPreviousWakeTime, const TickType_t xTimeIncrement );
+	void myPrintln(const char str[]);
+	void myPrintlnU32(uint32_t ulVal);
+	void myPrintlnDouble(double ulVal);
+	void myPrintlnUchar(unsigned char ucVal);
 #endif
 
 #ifdef __cplusplus

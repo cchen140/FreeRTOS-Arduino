@@ -16,7 +16,7 @@ void prvGeneralSyntheticTask(void *pvParameters);
 
 /* Define for application task. */
 #define APP_TASK_LOWEST_PRIORITY	tskIDLE_PRIORITY + 2
-#define APP_TASK_STACK_SIZE			100
+#define APP_TASK_STACK_SIZE			1000
 
 typedef struct TaskParam {
 	uint32_t periodUs;

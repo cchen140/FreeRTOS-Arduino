@@ -5,6 +5,9 @@
 void setup() {
 
   Serial.begin(57600);
+  Serial.println(F("Serial port is ready."));
+
+  pinMode(13, OUTPUT);
 
   createSyntheticTasks();
 
@@ -19,4 +22,20 @@ void setup() {
 // loop must never block
 void loop() {
   // Not used.
+}
+
+void myPrintlnU32(uint32_t ulVal) {
+	Serial.println(ulVal);
+}
+
+void myPrintln(const char str[]) {
+	Serial.println(str);
+}
+
+void myPrintlnDouble(double ulVal) {
+	Serial.println(ulVal);
+}
+
+void myPrintlnUchar(unsigned char ucVal) {
+	Serial.println(ucVal);
 }

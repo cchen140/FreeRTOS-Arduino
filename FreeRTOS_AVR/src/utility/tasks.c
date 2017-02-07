@@ -85,6 +85,7 @@ task.h is included from an application file. */
 #include "timers.h"
 #include "StackMacros.h"
 
+
 /* Lint e961 and e750 are suppressed as a MISRA exception justified because the
 MPU ports require MPU_WRAPPERS_INCLUDED_FROM_API_FILE to be defined for the
 header files above, but not in this file, in order to generate the correct
@@ -201,9 +202,10 @@ typedef struct tskTaskControlBlock
 		uint32_t	ulPeriod;
 		uint32_t	ulDeadline;
 		uint32_t	ulWorstCaseResponseTime;
-		uint32_t	ulWorstCaseMxInversionBudget;	// Vi
-		uint32_t	ulRemainingInversionBudget;
+		int32_t	ulWorstCaseMxInversionBudget;	// Vi
+		int32_t	ulRemainingInversionBudget;
 		UBaseType_t	uxMinInversionPriority;	// Mi
+		BaseType_t uxJobExecutionStarted;	// pdTRUE or pdFALSE for tracing
 	#endif
 
 } tskTCB;
@@ -232,6 +234,11 @@ PRIVILEGED_DATA static List_t xDelayedTaskList2;						/*< Delayed tasks (two lis
 PRIVILEGED_DATA static List_t * volatile pxDelayedTaskList;				/*< Points to the delayed task list currently being used. */
 PRIVILEGED_DATA static List_t * volatile pxOverflowDelayedTaskList;		/*< Points to the delayed task list currently being used to hold tasks that have overflowed the current tick count. */
 PRIVILEGED_DATA static List_t xPendingReadyList;						/*< Tasks that have been readied while the scheduler was suspended.  They will be moved to the ready list when the scheduler is resumed. */
+
+#if (configUSE_TASKSHUFFLER > 0)
+	// An array that stores priority inversion candidates.
+	PRIVILEGED_DATA TCB_t * volatile pxPriorityInversionCandidates[ configMAX_PRIORITIES ];
+#endif
 
 #if ( INCLUDE_vTaskDelete == 1 )
 
@@ -834,6 +841,7 @@ BaseType_t xTaskGenericCreateExtended( TaskFunction_t pxTaskCode, const char * c
 		pxNewTCB->ulPeriod = ulPeriod;
 		pxNewTCB->ulDeadline = ulPeriod;
 		pxNewTCB->ulWorstCaseExecutionTime = ulWCET;
+		pxNewTCB->uxJobExecutionStarted = pdFALSE;
 
 		/* Initialize the TCB stack to look as if the task was already running,
 		but had been interrupted by the scheduler.  The return address is set
@@ -1131,6 +1139,105 @@ BaseType_t xTaskGenericCreateExtended( TaskFunction_t pxTaskCode, const char * c
 
 #endif /* INCLUDE_vTaskDelayUntil */
 /*-----------------------------------------------------------*/
+
+#if (configUSE_TASKSHUFFLER > 0)
+	// CY: Adopted from vTaskDelayUntil()
+	void vTaskJobEnd( TickType_t * const pxPreviousWakeTime, const TickType_t xTimeIncrement )
+	{
+	TickType_t xTimeToWake;
+	BaseType_t xAlreadyYielded, xShouldDelay = pdFALSE;
+
+		configASSERT( pxPreviousWakeTime );
+		configASSERT( ( xTimeIncrement > 0U ) );
+		configASSERT( uxSchedulerSuspended == 0 );
+
+		vTaskSuspendAll();
+		{
+			/* Minor optimisation.  The tick count cannot change in this
+			block. */
+			const TickType_t xConstTickCount = xTickCount;
+
+			/* Generate the tick time at which the task wants to wake. */
+			xTimeToWake = *pxPreviousWakeTime + xTimeIncrement;
+
+			if( xConstTickCount < *pxPreviousWakeTime )
+			{
+				/* The tick count has overflowed since this function was
+				lasted called.  In this case the only time we should ever
+				actually delay is if the wake time has also	overflowed,
+				and the wake time is greater than the tick time.  When this
+				is the case it is as if neither time had overflowed. */
+				if( ( xTimeToWake < *pxPreviousWakeTime ) && ( xTimeToWake > xConstTickCount ) )
+				{
+					xShouldDelay = pdTRUE;
+				}
+				else
+				{
+					mtCOVERAGE_TEST_MARKER();
+				}
+			}
+			else
+			{
+				/* The tick time has not overflowed.  In this case we will
+				delay if either the wake time has overflowed, and/or the
+				tick time is less than the wake time. */
+				if( ( xTimeToWake < *pxPreviousWakeTime ) || ( xTimeToWake > xConstTickCount ) )
+				{
+					xShouldDelay = pdTRUE;
+				}
+				else
+				{
+					mtCOVERAGE_TEST_MARKER();
+				}
+			}
+
+			/* Update the wake time ready for the next call. */
+			*pxPreviousWakeTime = xTimeToWake;
+
+			/* Reset TaskShuffler's budget. */
+			pxCurrentTCB->ulRemainingInversionBudget = pxCurrentTCB->ulWorstCaseMxInversionBudget;
+			pxCurrentTCB->uxJobExecutionStarted = pdFALSE;
+
+			if( xShouldDelay != pdFALSE )
+			{
+				traceTASK_DELAY_UNTIL();
+
+				/* Remove the task from the ready list before adding it to the
+				blocked list as the same list item is used for both lists. */
+				if( uxListRemove( &( pxCurrentTCB->xGenericListItem ) ) == ( UBaseType_t ) 0 )
+				{
+					/* The current task must be in a ready list, so there is
+					no need to check, and the port reset macro can be called
+					directly. */
+					portRESET_READY_PRIORITY( pxCurrentTCB->uxPriority, uxTopReadyPriority );
+				}
+				else
+				{
+					mtCOVERAGE_TEST_MARKER();
+				}
+
+				prvAddCurrentTaskToDelayedList( xTimeToWake );
+			}
+			else
+			{
+				mtCOVERAGE_TEST_MARKER();
+			}
+		}
+		xAlreadyYielded = xTaskResumeAll();
+
+		/* Force a reschedule if xTaskResumeAll has not already done so, we may
+		have put ourselves to sleep. */
+		if( xAlreadyYielded == pdFALSE )
+		{
+			portYIELD_WITHIN_API();
+		}
+		else
+		{
+			mtCOVERAGE_TEST_MARKER();
+		}
+	}
+#endif
+
 
 #if ( INCLUDE_vTaskDelay == 1 )
 
@@ -1764,11 +1871,6 @@ void vTaskStartScheduler( void )
 		vInitScheduleEventOutputIos();
 	#endif
 
-	/* Compute necessary variables (response time, etc.) for taskshuffler before the idle task is added. */
-	#if ( configUSE_TASKSHUFFLER > 0 )
-		vTaskShufflerInitialize();
-	#endif
-
 	/* Add the idle task at the lowest priority. */
 	#if ( INCLUDE_xTaskGetIdleTaskHandle == 1 )
 	{
@@ -1782,6 +1884,11 @@ void vTaskStartScheduler( void )
 		xReturn = xTaskCreate( prvIdleTask, "IDLE", tskIDLE_STACK_SIZE, ( void * ) NULL, ( tskIDLE_PRIORITY | portPRIVILEGE_BIT ), NULL );  /*lint !e961 MISRA exception, justified as it is not a redundant explicit cast to all supported compilers. */
 	}
 	#endif /* INCLUDE_xTaskGetIdleTaskHandle */
+
+	/* Compute necessary variables (response time, etc.) for taskshuffler before the idle task is added. */
+	#if ( configUSE_TASKSHUFFLER > 0 )
+		vTaskShufflerInitialize();
+	#endif
 
 	#if ( configUSE_TIMERS == 1 )
 	{
@@ -2191,6 +2298,32 @@ BaseType_t xSwitchRequired = pdFALSE;
 				mtCOVERAGE_TEST_MARKER();
 			}
 
+			/* TaskShuffler: Update budget */
+			#if (configUSE_TASKSHUFFLER > 0)
+				/* Iterate through every task in the ready list.
+				 * Decrease budgets of the tasks whose priorities are higher than the current one.
+				 */
+				for (UBaseType_t uxTaskPriority_i=pxCurrentTCB->uxPriority+1; uxTaskPriority_i<configMAX_PRIORITIES; uxTaskPriority_i++) {
+					// Iterate through each task from the lowest priority (0 is supposed to be idle task so skip 0).
+					// Assuming there is only one (or zero) task in a priority list.
+					if (pxReadyTasksLists[uxTaskPriority_i].uxNumberOfItems == 0) {
+						// If there is no task in this priority, then head to the next priority.
+						continue;
+					}
+
+					//TCB_t *pxTCB_i = pxReadyTasksLists[uxTaskPriority_i].pxIndex->pvOwner;
+					TCB_t *pxTCB_i;
+					listGET_OWNER_OF_NEXT_ENTRY(pxTCB_i, &( pxReadyTasksLists[ uxTaskPriority_i ] ));
+					pxTCB_i->ulRemainingInversionBudget--;
+
+					if ( pxTCB_i->ulRemainingInversionBudget <= 0 ) {
+						// A higher task has no budget. A context switch is needed!
+						//myPrintln(pxCurrentTCB->pcTaskName);
+						xSwitchRequired = pdTRUE;
+					}
+				}
+			#endif
+
 			/* See if this tick has made a timeout expire.  Tasks are stored in
 			the	queue in the order of their wake time - meaning once one task
 			has been found whose block time has not expired there is no need to
@@ -2438,9 +2571,14 @@ void vTaskSwitchContext( void )
 		xYieldPending = pdFALSE;
 		traceTASK_SWITCHED_OUT();
 
-		#ifdef configUSE_SCHEDULE_OUTPUT_IO
-			vOutputSchedulEventToIo(uxGetCurrentTaskNumber(), eJobEnd);
-		#endif
+		/*#ifdef configUSE_SCHEDULE_OUTPUT_IO
+			if ( pxCurrentTCB->uxJobExecutionStarted == pdFALSE ) {
+				// The job is finished so that the variable is reset when calling delayuntil.
+				vOutputSchedulEventToIo(uxGetCurrentTaskTcbNumber(), eJobEnd);
+			} else {
+				vOutputSchedulEventToIo(uxGetCurrentTaskTcbNumber(), eJobPreempted);
+			}
+		#endif*/
 
 		#if ( configGENERATE_RUN_TIME_STATS == 1 )
 		{
@@ -2472,13 +2610,76 @@ void vTaskSwitchContext( void )
 		/* Check for stack overflow, if configured. */
 		taskCHECK_FOR_STACK_OVERFLOW();
 
-		/* Select a new task to run using either the generic C or port
-		optimised asm code. */
-		taskSELECT_HIGHEST_PRIORITY_TASK();
+		/* TaskShuffler: Build candidate list and select one. */
+		#if (configUSE_TASKSHUFFLER > 0)
+		// TODO: Be careful about the stack memory that is used here.
+		// Does it consume task's stack?
+			BaseType_t xIsPresentHighestPriorityTask = pdTRUE;
+			BaseType_t ulMinimumInversionPriority = tskIDLE_PRIORITY;	// It will be initialized in the loop.
+			uint32_t ulPriorityInversionCandidateCount = 0;
+			for (UBaseType_t uxTaskPriority_i=(configMAX_PRIORITIES-1); uxTaskPriority_i>=ulMinimumInversionPriority; uxTaskPriority_i--) {
+				// Iterate through each task from the lowest priority (0 is supposed to be idle task so skip 0).
+				// Assuming there is only one (or zero) task in a priority list.
+				if (pxReadyTasksLists[uxTaskPriority_i].uxNumberOfItems == 0) {
+					// If there is no task in this priority, then head to the next priority.
+					continue;
+				}
+
+				//TCB_t *pxTCB_i = pxReadyTasksLists[uxTaskPriority_i].pxIndex->pvOwner;
+				TCB_t *pxTCB_i;
+				listGET_OWNER_OF_NEXT_ENTRY(pxTCB_i, &( pxReadyTasksLists[ uxTaskPriority_i ] ));
+
+				if (xIsPresentHighestPriorityTask == pdTRUE) {
+					xIsPresentHighestPriorityTask = pdFALSE;
+					// TODO: pxTCB_i->uxMinInversionPriority is not initialized.
+					//ulMinimumInversionPriority = pxTCB_i->uxMinInversionPriority;
+					// TODO: Should we update uxTopReadyPriority here?
+					uxTopReadyPriority = uxTaskPriority_i;
+				}
+
+				/* Put current iterating task in the candidate list. */
+				pxPriorityInversionCandidates[ulPriorityInversionCandidateCount] = pxTCB_i;
+				ulPriorityInversionCandidateCount++;
+
+				//myPrintlnUchar(uxTaskPriority_i);
+
+
+				if ( pxTCB_i->ulRemainingInversionBudget <= 0 ) {
+					// This task has no budget, so no need to go through lower priority tasks.
+					//myPrintlnUchar(uxTaskPriority_i);
+					//myPrintlnU32(ulPriorityInversionCandidateCount);
+					break;
+				}
+			}
+
+			//myPrintln("Scheduler:");
+
+			//while(1);
+
+			/* Randomly select tasks from the candidates. */
+			pxCurrentTCB = pxPriorityInversionCandidates[rand() % ulPriorityInversionCandidateCount];	// 0 to ulPriorityInversionCandidateCount-1
+
+		#else
+				/* Select a new task to run using either the generic C or port
+					optimised asm code. */
+				taskSELECT_HIGHEST_PRIORITY_TASK();
+		#endif
+
 		traceTASK_SWITCHED_IN();
 
 		#ifdef configUSE_SCHEDULE_OUTPUT_IO
-			vOutputSchedulEventToIo(uxGetCurrentTaskNumber(), eJobStart);
+			if ( pxCurrentTCB->uxPriority == tskIDLE_PRIORITY) {
+				// It is idle task.
+				vOutputSchedulEventToIo(uxGetCurrentTaskTcbNumber(), eJobIdleStart);
+			} else {
+				if ( pxCurrentTCB->uxJobExecutionStarted == pdFALSE ) {
+					// It's a new job starting!
+					vOutputSchedulEventToIo(uxGetCurrentTaskTcbNumber(), eJobStart);
+					pxCurrentTCB->uxJobExecutionStarted = pdTRUE;
+				} else {
+					vOutputSchedulEventToIo(uxGetCurrentTaskTcbNumber(), eJobResume);
+				}
+			}
 		#endif
 
 		#if ( configUSE_NEWLIB_REENTRANT == 1 )
@@ -2895,8 +3096,8 @@ void vTaskMissedYield( void )
 /*-----------------------------------------------------------*/
 
 #if ( configUSE_SCHEDULE_OUTPUT_IO == 1)
-	UBaseType_t uxGetCurrentTaskNumber( void ) {
-		return pxCurrentTCB->uxTaskNumber;
+	UBaseType_t uxGetCurrentTaskTcbNumber( void ) {
+		return pxCurrentTCB->uxTCBNumber;
 	}
 #endif
 
@@ -4791,6 +4992,18 @@ TickType_t uxReturn;
 //	}
 
 	void vComputeInversionBudget(List_t pxTaskLists[], UBaseType_t uxlistCount) {
+		// Set idle task's budget to 0
+		TCB_t *pxTCB_idle;
+		listGET_OWNER_OF_NEXT_ENTRY(pxTCB_idle, &( pxTaskLists[ tskIDLE_PRIORITY ] ));
+		pxTCB_idle->ulWorstCaseMxInversionBudget = 0;
+		pxTCB_idle->ulRemainingInversionBudget = 0;
+
+		myPrintln("Idle Task:");
+		//myPrintln(pxTCB_idle->pcTaskName);
+		myPrintlnU32(pxTCB_idle->uxTCBNumber);
+		myPrintlnUchar(pxTCB_idle->uxBasePriority);
+
+
 		for (UBaseType_t uxTaskPriority_i=1; uxTaskPriority_i<uxlistCount; uxTaskPriority_i++) {
 			// Iterate through each task from the lowest priority (0 is supposed to be idle task so skip 0).
 			// Assuming there is only one (or zero) task in a priority list.
@@ -4802,8 +5015,12 @@ TickType_t uxReturn;
 			//int numItr = 0;
 			//double Wi = task_i.deadline;
 			//double prev_Wi = 0;
-			uint32_t = 0;
-			TCB_t *pxTCB_i = pxTaskLists[uxTaskPriority_i].pxIndex->pvOwner;
+			//uint32_t = 0;
+
+			// TODO: Need to handle if there are multiple tasks in the same priority list.
+			TCB_t *pxTCB_i;
+			listGET_OWNER_OF_NEXT_ENTRY(pxTCB_i, &( pxTaskLists[ uxTaskPriority_i ] ));
+
 			double dDeadline_i = (double)(pxTCB_i->ulDeadline);
 			uint32_t ulExecTime_i = pxTCB_i->ulWorstCaseExecutionTime;
 
@@ -4814,7 +5031,11 @@ TickType_t uxReturn;
 					continue;
 				}
 
-				TCB_t *pxTCB_j = pxTaskLists[uxTaskPriority_j].pxIndex->pvOwner;
+				// TODO: Need to handle if there are multiple tasks in the same priority list.
+				//TCB_t *pxTCB_j = pxTaskLists[uxTaskPriority_j].pxIndex->pvOwner;
+				TCB_t *pxTCB_j;
+				listGET_OWNER_OF_NEXT_ENTRY(pxTCB_j, &( pxTaskLists[ uxTaskPriority_j ] ));
+
 				double dPeriod_j = pxTCB_j->ulPeriod;
 				double dExecTime_j = pxTCB_j->ulWorstCaseExecutionTime;
 
@@ -4833,8 +5054,15 @@ TickType_t uxReturn;
 
 			//return task_i.deadline - Wi;
 
-			pxTCB_i->ulWorstCaseMxInversionBudget = (uint32_t)(dDeadline_i - (dInterference + ulExecTime_i));
+			pxTCB_i->ulWorstCaseMxInversionBudget = (uint32_t) ((dDeadline_i - (dInterference + ulExecTime_i)) / (1000000L/configTICK_RATE_HZ));
 			pxTCB_i->ulRemainingInversionBudget = pxTCB_i->ulWorstCaseMxInversionBudget;
+
+			myPrintln("Task:");
+			myPrintlnU32(pxTCB_i->uxTCBNumber);
+			//myPrintlnU32(pxTCB_i->uxTCBNumber);
+			myPrintlnU32(uxTaskPriority_i);
+			myPrintlnU32(pxTCB_i->ulWorstCaseMxInversionBudget);
+			myPrintln("End.");
 		}
 	}
 

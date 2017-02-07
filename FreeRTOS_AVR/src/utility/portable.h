@@ -205,7 +205,10 @@ void vPortEndScheduler( void ) PRIVILEGED_FUNCTION;
 	#define	SCHEDULE_OUTPUT_IO_PORT	PORTK
 	typedef enum {	// max 2-bit = 4 event types
 		eJobStart = 0,
-		eJobEnd
+		eJobEnd,
+		eJobResume,
+		eJobPreempted,
+		eJobIdleStart
 	} eTaskSchedulEvent;
 	void vInitScheduleEventOutputIos(void);
 	void vOutputSchedulEventToIo(UBaseType_t inTaskNum, eTaskSchedulEvent inEvent);
