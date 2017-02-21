@@ -506,14 +506,25 @@ void vPortYield( void )
  * difference from vPortYield() is the tick count is incremented as the
  * call comes from the tick ISR.
  */
+extern unsigned int timerBegin;
+extern unsigned int timerBeginH;
+extern unsigned int timerEnd;
+extern unsigned int timerEndH;
 void vPortYieldFromTick( void ) __attribute__ ( ( naked ) );
 void vPortYieldFromTick( void )
 {
 	portSAVE_CONTEXT();
+	//timerBegin = TCNT0;
 	if( xTaskIncrementTick() != pdFALSE )
 	{
+		//timerEnd = TCNT0;
 		vTaskSwitchContext();
+	} else {
+		//timerEnd = 0;
 	}
+
+	//timerEnd = TCNT0;
+
 	portRESTORE_CONTEXT();
 
 	asm volatile ( "ret" );
@@ -526,6 +537,8 @@ void vPortYieldFromTick( void )
  */
 static void prvSetupTimerInterrupt( void )
 {
+  //TCCR4B = 1;
+
   OCR0A = 1;
   TIMSK0  |= (1 << OCIE0A);
 }

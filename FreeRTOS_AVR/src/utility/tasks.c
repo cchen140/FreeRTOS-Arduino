@@ -158,7 +158,7 @@ typedef struct tskTaskControlBlock
 		UBaseType_t 	uxCriticalNesting; 	/*< Holds the critical section nesting depth for ports that do not maintain their own count in the port layer. */
 	#endif
 
-	#if ( configUSE_TRACE_FACILITY == 1 || configUSE_SCHEDULE_OUTPUT_IO == 1)
+	#if ( configUSE_TRACE_FACILITY == 1 || configUSE_SCHEDULE_OUTPUT_IO == 1 || configUSE_TASKSHUFFLER>0)
 		UBaseType_t		uxTCBNumber;		/*< Stores a number that increments each time a TCB is created.  It allows debuggers to determine when a task has been deleted and then recreated. */
 		UBaseType_t  	uxTaskNumber;		/*< Stores a number specifically for use by third party trace code. */
 	#endif
@@ -205,8 +205,8 @@ typedef struct tskTaskControlBlock
 		int32_t	ulWorstCaseMxInversionBudget;	// Vi
 		int32_t	ulRemainingInversionBudget;
 		UBaseType_t	uxMinInversionPriority;	// Mi
-		BaseType_t uxJobExecutionStarted;	// pdTRUE or pdFALSE for tracing
 	#endif
+		BaseType_t uxJobExecutionStarted;	// pdTRUE or pdFALSE for tracing
 
 } tskTCB;
 
@@ -2558,6 +2558,10 @@ BaseType_t xSwitchRequired = pdFALSE;
 #endif /* configUSE_APPLICATION_TASK_TAG */
 /*-----------------------------------------------------------*/
 
+unsigned int timerBegin = 0;
+unsigned int timerBeginH = 0;
+unsigned int timerEnd = 0;
+unsigned int timerEndH = 0;
 void vTaskSwitchContext( void )
 {
 	if( uxSchedulerSuspended != ( UBaseType_t ) pdFALSE )
@@ -2612,6 +2616,12 @@ void vTaskSwitchContext( void )
 
 		/* TaskShuffler: Build candidate list and select one. */
 		#if (configUSE_TASKSHUFFLER > 0)
+
+		// Benchmark
+		//TCNT0   _SFR_IO8(0X26)
+		//timerBegin = TCNT4;
+
+
 		// TODO: Be careful about the stack memory that is used here.
 		// Does it consume task's stack?
 			BaseType_t xIsPresentHighestPriorityTask = pdTRUE;
@@ -2656,13 +2666,19 @@ void vTaskSwitchContext( void )
 
 			//while(1);
 
+			timerBegin = TCNT0;
 			/* Randomly select tasks from the candidates. */
-			pxCurrentTCB = pxPriorityInversionCandidates[rand() % ulPriorityInversionCandidateCount];	// 0 to ulPriorityInversionCandidateCount-1
+			//pxCurrentTCB = pxPriorityInversionCandidates[rand() % ulPriorityInversionCandidateCount];	// 0 to ulPriorityInversionCandidateCount-1
+			pxCurrentTCB = pxPriorityInversionCandidates[0];	// 0 to ulPriorityInversionCandidateCount-1
+
+			timerEnd = TCNT0;
 
 		#else
 				/* Select a new task to run using either the generic C or port
 					optimised asm code. */
+				//timerBegin = TCNT4;
 				taskSELECT_HIGHEST_PRIORITY_TASK();
+				//timerEnd = TCNT4;
 		#endif
 
 		traceTASK_SWITCHED_IN();

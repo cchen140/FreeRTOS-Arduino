@@ -1,10 +1,15 @@
 #include "SyntheticTasks.h"
 
+extern unsigned int timerBegin;
+extern unsigned int timerBeginH;
+extern unsigned int timerEnd;
+extern unsigned int timerEndH;
+
 TaskParam appTaskParamArray[] = {
 //  period (us), priority, computation time (us), computing size
 		{ 1000000, APP_TASK_LOWEST_PRIORITY, 	500000, 0 },
 		{ 500000, APP_TASK_LOWEST_PRIORITY + 1, 50000, 0 },
-		{ 10000, APP_TASK_LOWEST_PRIORITY + 2, 1900, 0 }
+		{ 100000, APP_TASK_LOWEST_PRIORITY + 2, 19000, 0 }
 //		,
 //		{20000, APP_TASK_LOWEST_PRIORITY+3, 100, 0},
 //		{18000, APP_TASK_LOWEST_PRIORITY+4, 100, 0},
@@ -86,6 +91,17 @@ void prvGeneralSyntheticTask(void *pvParameters) {
 
 	while (true) {
 		// Use delay function to synthesize computation load.
+
+
+
+		//taskENTER_CRITICAL();
+		//Serial.println(timerBegin);
+		//Serial.println(timerEnd);
+		//Serial.println(timerBegin);
+		//Serial.println(timerEnd);
+		//Serial.println(timerEnd - timerBegin);
+		//Serial.println("");
+		//taskEXIT_CRITICAL();
 
 		/* Since delayMicroseconds() is not precise when delaying more than
 		 * 1000 microseconds (1ms), we use delay() for delays above 1ms. */
